@@ -532,6 +532,9 @@ document.addEventListener('DOMContentLoaded', () => {
         
         dom.modalContainer.addEventListener('click', handleModalClick);
 
+        // Dedicated listener for the dynamic list inside the projects modal
+        dom.projectsList.addEventListener('click', handleProjectsListClick);
+
         dom.showTimerToggle.addEventListener('change', (e) => {
             appState.settings.showTimer = e.target.checked;
             saveSettings();
@@ -723,6 +726,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 navigator.serviceWorker.register('/service-worker.js')
                     .then(reg => console.log('Service Worker registered.', reg))
                     .catch(err => console.log('Service Worker registration failed: ', err));
+            });
+        }
+    }
+
+    function handleProjectsListClick(e) {
+        const target = e.target.closest('[data-action]');
+        if (!target) return;
+
+        const { action, id, name } = target.dataset;
+
+        if (action === 'load-project') {
+            loadProject(id);
+        } else if (action === 'delete-project') {
+            showConfirmation({
+                title: `Delete "${name}"?`,
+                message: 'This project will be permanently removed from your device.',
+                onConfirm: () => handleProjectDeletion(id)
             });
         }
     }
