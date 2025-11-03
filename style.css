@@ -1,7 +1,5 @@
 /* Basic styling and CSS variables for theming */
 :root {
-    --color-light-bg: #f3f4f6;
-    --color-light-text: #1f2937;
     --color-dark-bg: #111827;
     --color-dark-text: #e5e7eb;
 }
@@ -24,8 +22,15 @@
   to { opacity: 1; transform: translate(-50%, -50%); }
 }
 
+@keyframes slide-up-fast {
+    from { opacity: 0; transform: translate(-50%, 20px); }
+    to { opacity: 1; transform: translate(-50%, 0); }
+}
+
 .animate-fade-in { animation: fade-in 0.2s ease-out forwards; }
 .animate-slide-up { animation: slide-up 0.3s ease-out forwards; }
+.animate-slide-up-fast { animation: slide-up-fast 0.3s ease-out forwards; }
+
 
 /* Hide elements accessibly */
 [hidden] {
@@ -33,10 +38,7 @@
 }
 
 /* Tweak Tailwind form styles */
-input[type="checkbox"], input[type="radio"] {
-    border-color: #6b7280;
-}
-.dark input[type="checkbox"], .dark input[type-radio] {
+input[type="checkbox"], input[type-radio] {
     border-color: #4b5563;
     background-color: #374151;
 }

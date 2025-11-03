@@ -1,14 +1,14 @@
-// app.js: Core application logic.
+// app.js: Core application logic for the Crochet Counter PWA.
 
 document.addEventListener('DOMContentLoaded', () => {
 
     // --- STATE MANAGEMENT --- //
-    
+
+    // Holds the entire application state.
     let appState = {
         activeProject: null,
         savedProjects: [],
         settings: {
-            theme: 'light',
             showTimer: true,
         },
         activeModal: null, // null, 'settings', 'projects', 'confirm'
@@ -17,14 +17,22 @@ document.addEventListener('DOMContentLoaded', () => {
             data: null,
             title: '',
             message: '',
+            onConfirm: null,
         },
         isDirty: false, // Tracks if the active project has unsaved changes
+        toast: { // For showing transient messages
+            message: null,
+            type: 'info', // 'info', 'success', 'error'
+            visible: false,
+        }
     };
 
+    // Holds the interval ID for the project timer.
     let projectTimerInterval;
 
     // --- DOM ELEMENT SELECTORS --- //
 
+    // Centralized object for all DOM element references.
     const dom = {
         app: document.getElementById('app'),
         projectContainer: document.getElementById('project-container'),
@@ -47,21 +55,23 @@ document.addEventListener('DOMContentLoaded', () => {
         projectsList: document.getElementById('projects-list'),
         confirmTitle: document.querySelector('[data-binding="confirm-title"]'),
         confirmMessage: document.querySelector('[data-binding="confirm-message"]'),
-        themeToggleBtn: document.querySelector('[data-action="toggle-theme"]'),
         showTimerToggle: document.querySelector('[data-setting="showTimer"]'),
+        toastContainer: document.getElementById('toast-container'),
     };
-
 
     // --- INITIALIZATION --- //
 
+    // Main entry point for the application.
     function init() {
         loadSettings();
         registerEventListeners();
         loadInitialProject();
         startProjectTimer();
         registerServiceWorker();
+        applyTheme(); // Apply dark theme on startup
     }
 
+    // Fetches saved projects and loads the most recent one, or creates a new default project.
     async function loadInitialProject() {
         await fetchSavedProjects();
         const lastProject = appState.savedProjects[0]; // Already sorted by DB call
@@ -73,13 +83,16 @@ document.addEventListener('DOMContentLoaded', () => {
         render();
     }
 
+    // --- PROJECT & STATE CORE LOGIC --- //
+
+    // Creates a blank project object.
     function createDefaultProject() {
         return {
             id: null, // No ID means it's not saved
             name: 'New Project',
             lastModified: Date.now(),
             timer: { totalElapsedMs: 0, isPaused: false, lastTick: Date.now() },
-            mainCounter: { id: 'main', name: 'Row', value: 0, target: 0 },
+            mainCounter: { id: 'main', name: 'Row', value: 0, target: null },
             subCounters: [],
             incrementHistory: [],
             notes: '',
@@ -87,42 +100,145 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
     
-    // --- STATE & PROJECT LOGIC --- //
-
+    // Sets the provided project as the active one in the application state.
     function setActiveProject(project) {
         appState.activeProject = project;
         appState.isDirty = false;
-        // Ensure timer has a lastTick property for running timers
-        if (!project.timer.isPaused) {
+        if (project.timer && !project.timer.isPaused) {
             project.timer.lastTick = Date.now();
         }
     }
 
+    // Marks the current project as having unsaved changes.
     function markDirty() {
         if (appState.isDirty) return;
         appState.isDirty = true;
         renderSaveButton();
     }
     
+    // A wrapper function to apply a modification, mark the project as dirty,
+    // auto-save if possible, and then re-render the UI.
     function updateAndSave(modificationFn) {
+        if (!appState.activeProject) return;
         modificationFn();
         appState.activeProject.lastModified = Date.now();
         markDirty();
 
+        // Auto-save if the project is already saved.
         if (appState.activeProject.id) {
-            // Auto-save if the project is already persisted
-            saveActiveProject();
+            saveActiveProject(true); // Pass true for a silent save
         }
         render();
     }
 
+    // Updates a property on a counter or the project itself without a full re-render.
+    // Used for input fields to prevent losing focus.
+    function updateProjectProperty(prop, value) {
+        if (!appState.activeProject) return;
+        appState.activeProject[prop] = value;
+        appState.activeProject.lastModified = Date.now();
+        markDirty();
+        
+        if (appState.activeProject.id) {
+            saveActiveProject(true);
+        } else {
+            renderSaveButton();
+        }
+    }
+
+    function updateCounterProperty(counterId, prop, value) {
+        if (!appState.activeProject) return;
+        const counter = findCounter(counterId);
+        if (counter) {
+            counter[prop] = value;
+            appState.activeProject.lastModified = Date.now();
+            markDirty();
+            if (appState.activeProject.id) {
+                saveActiveProject(true);
+            } else {
+                renderSaveButton();
+            }
+        }
+    }
+
+    // --- DATABASE INTERACTIONS --- //
+
+    // Saves the currently active project to IndexedDB.
+    async function saveActiveProject(isSilent = false) {
+        const project = appState.activeProject;
+        if (!project.name.trim()) {
+            showToast("Project name cannot be empty.", 'error');
+            return;
+        }
+        if (!project.id) {
+            project.id = `project-${Date.now()}`;
+        }
+        project.lastModified = Date.now();
+        
+        try {
+            await saveProject(project);
+            appState.isDirty = false;
+            if (!isSilent) {
+                showToast("Project saved!", 'success');
+            }
+            await fetchSavedProjects(); // Refresh list in case of name change
+            render();
+        } catch (error) {
+            console.error("Failed to save project:", error);
+            showToast("Error saving project.", 'error');
+        }
+    }
+    
+    // Fetches all projects from the database and updates the state.
+    async function fetchSavedProjects() {
+        appState.savedProjects = await getAllProjects();
+    }
+
+    // Loads a project from the saved projects list, confirming if there are unsaved changes.
+    async function loadProject(projectId) {
+        if (appState.isDirty) {
+            showConfirmation({
+                title: 'Unsaved Changes',
+                message: 'You have unsaved changes. Are you sure you want to load another project and discard them?',
+                onConfirm: () => performLoadProject(projectId)
+            });
+        } else {
+            performLoadProject(projectId);
+        }
+    }
+
+    // Performs the actual project loading logic.
+    function performLoadProject(projectId) {
+        const projectToLoad = appState.savedProjects.find(p => p.id === projectId);
+        if (projectToLoad) {
+            setActiveProject(projectToLoad);
+            closeModal();
+            render();
+        }
+    }
+    
+    // Deletes a project from the database and handles UI updates.
+    async function handleProjectDeletion(projectId) {
+        await deleteProject(projectId);
+        await fetchSavedProjects();
+        
+        // If the deleted project was the active one, load the next available or a new one.
+        if (appState.activeProject && appState.activeProject.id === projectId) {
+            const nextProject = appState.savedProjects[0];
+            setActiveProject(nextProject || createDefaultProject());
+        }
+        render();
+        showToast('Project deleted.', 'success');
+    }
+
+    // --- COUNTER ACTIONS --- //
+
     function incrementCounter(counterId) {
         updateAndSave(() => {
-            const project = appState.activeProject;
             const counter = findCounter(counterId);
             if (counter) {
                 counter.value++;
-                project.incrementHistory.push({ counterId: counterId, timestamp: Date.now() });
+                appState.activeProject.incrementHistory.push({ counterId, timestamp: Date.now() });
             }
         });
     }
@@ -151,7 +267,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 id: `counter-${Date.now()}`,
                 name: 'New Counter',
                 value: 0,
-                target: 0,
+                target: null,
             };
             appState.activeProject.subCounters.push(newCounter);
         });
@@ -164,64 +280,15 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function updateCounterProperty(counterId, prop, value) {
-        updateAndSave(() => {
-            const counter = findCounter(counterId);
-            if (counter) {
-                counter[prop] = value;
-            }
-        });
-    }
-    
-    async function saveActiveProject() {
-        const project = appState.activeProject;
-        if (!project.id) {
-            project.id = `project-${Date.now()}`;
-        }
-        project.lastModified = Date.now();
-        
-        try {
-            await saveProject(project);
-            appState.isDirty = false;
-            await fetchSavedProjects(); // Refresh the list of saved projects
-            render(); // Re-render to update UI state (e.g., save button)
-        } catch (error) {
-            console.error("Failed to save project:", error);
-            // Optionally show a user-facing error message
-        }
-    }
-    
-    async function fetchSavedProjects() {
-        appState.savedProjects = await getAllProjects();
-    }
-
-    async function loadProject(projectId) {
-        const projectToLoad = appState.savedProjects.find(p => p.id === projectId);
-        if (projectToLoad) {
-            setActiveProject(projectToLoad);
-            closeModal();
-            render();
-        }
-    }
-    
-    async function handleProjectDeletion(projectId) {
-        await deleteProject(projectId);
-        await fetchSavedProjects();
-        // If the deleted project was the active one, start a new one
-        if (appState.activeProject.id === projectId) {
-            setActiveProject(createDefaultProject());
-        }
-        render();
-    }
-
-
     // --- TIMER LOGIC --- //
 
+    // Starts the main timer interval.
     function startProjectTimer() {
         clearInterval(projectTimerInterval);
         projectTimerInterval = setInterval(updateTimer, 1000);
     }
     
+    // Updates the elapsed time for the active project.
     function updateTimer() {
         const timer = appState.activeProject?.timer;
         if (!timer || timer.isPaused) return;
@@ -234,37 +301,31 @@ document.addEventListener('DOMContentLoaded', () => {
         renderTimer();
     }
 
+    // Toggles the paused state of the project timer.
     function toggleTimerPause() {
         updateAndSave(() => {
             const timer = appState.activeProject.timer;
             timer.isPaused = !timer.isPaused;
             if (!timer.isPaused) {
-                timer.lastTick = Date.now(); // Set tick time on resume
+                timer.lastTick = Date.now();
             }
         });
     }
 
-
     // --- RENDERING --- //
 
+    // Main render function to update the entire UI based on the current state.
     function render() {
         if (!appState.activeProject) return;
         
-        // Render project details
         dom.projectName.value = appState.activeProject.name;
         dom.projectNotes.value = appState.activeProject.notes;
         dom.projectPatternUrl.value = appState.activeProject.patternUrl;
         
-        // Render counters
         renderMainCounter();
         renderSubCounters();
-        
-        // Render UI state
         renderTimer();
         renderSaveButton();
-        renderTheme();
-        
-        // Render modals
         renderModals();
         renderProjectsList();
     }
@@ -276,10 +337,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderSubCounters() {
         const counters = appState.activeProject.subCounters;
-        if (counters.length === 0) {
-            dom.subCountersContainer.innerHTML = '';
-            return;
-        }
         dom.subCountersContainer.innerHTML = counters.map(c => createCounterHTML(c, false)).join('');
     }
 
@@ -292,28 +349,32 @@ document.addEventListener('DOMContentLoaded', () => {
         
         dom.timerDisplay.textContent = formatTime(timer.totalElapsedMs);
         dom.timerPauseBtn.innerHTML = timer.isPaused
-            ? `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /></svg>`
-            : `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6" /></svg>`;
+            ? `<svg xmlns="http://www.w.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" /></svg>`
+            : `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" /></svg>`;
     }
 
+    // Updates the save button's text and disabled state.
     function renderSaveButton() {
         const project = appState.activeProject;
-        if (project.id) {
+        if (project.id && !appState.isDirty) {
             dom.saveProjectBtn.textContent = 'Saved';
-            dom.saveProjectBtn.disabled = !appState.isDirty;
+            dom.saveProjectBtn.disabled = true;
+        } else if (project.id && appState.isDirty) {
+            dom.saveProjectBtn.textContent = 'Save Changes';
+            dom.saveProjectBtn.disabled = false;
         } else {
             dom.saveProjectBtn.textContent = 'Save to Device';
             dom.saveProjectBtn.disabled = false;
         }
     }
     
-    function renderTheme() {
-        const isDark = appState.settings.theme === 'dark';
-        document.documentElement.classList.toggle('dark', isDark);
-        dom.themeToggleBtn.querySelector('span').classList.toggle('dark:translate-x-6', isDark);
-        document.querySelector('meta[name="theme-color"]').setAttribute('content', isDark ? '#111827' : '#ffffff');
+    // Sets the theme for the application (always dark).
+    function applyTheme() {
+        document.documentElement.classList.add('dark');
+        document.querySelector('meta[name="theme-color"]').setAttribute('content', '#111827');
     }
     
+    // Renders the list of saved projects in the projects modal.
     function renderProjectsList() {
         if (appState.savedProjects.length === 0) {
             dom.projectsList.innerHTML = `<p class="text-center text-gray-500 py-4">No projects saved yet.</p>`;
@@ -321,10 +382,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         dom.projectsList.innerHTML = appState.savedProjects.map(p => `
-            <div class="flex items-center justify-between p-3 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700">
+            <div class="flex items-center justify-between p-3 rounded-md hover:bg-gray-700">
                 <div>
                     <p class="font-semibold">${p.name}</p>
-                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                    <p class="text-sm text-gray-400">
                         ${p.mainCounter.name}: ${p.mainCounter.value} &bull; Last modified: ${new Date(p.lastModified).toLocaleDateString()}
                     </p>
                 </div>
@@ -338,8 +399,63 @@ document.addEventListener('DOMContentLoaded', () => {
         `).join('');
     }
 
+    // Generates the HTML string for a single counter.
+    function createCounterHTML(counter, isMain) {
+        const showTarget = appState.settings.showTimer && (counter.target !== null && counter.target > 0);
+        const targetHTML = `
+            <span class="text-2xl text-gray-500">/</span>
+            <input type="number" min="0" value="${counter.target || ''}" placeholder="Target" data-property="target" data-id="${counter.id}" 
+                   class="bg-transparent text-2xl w-24 text-center focus:bg-gray-700 rounded-md p-1 -m-1">
+        `;
+        
+        const eta = appState.settings.showTimer ? calculateETA(counter) : null;
+        const etaHTML = eta ? `<p class="text-xs text-center text-violet-400 font-medium mt-1">${eta}</p>` : '';
 
-    // --- MODAL MANAGEMENT --- //
+        const deleteBtnHTML = isMain ? '' : `
+            <button data-action="delete-sub-counter" data-id="${counter.id}" class="absolute -top-2 -right-2 p-1 bg-gray-600 rounded-full text-gray-300 hover:bg-red-500 hover:text-white transition">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+        `;
+
+        const containerClasses = isMain 
+            ? 'flex flex-col items-center' 
+            : 'relative bg-gray-800 p-4 rounded-xl shadow-md flex items-center justify-between space-x-4';
+            
+        const nameInputClasses = isMain 
+            ? 'font-semibold text-xl text-center' 
+            : 'font-medium flex-grow';
+
+        const counterDisplayHTML = `
+            <div class="flex items-baseline justify-center font-mono font-bold text-violet-400">
+                <span class="counter-value">${counter.value}</span>
+                ${showTarget ? targetHTML : ''}
+            </div>
+            ${etaHTML}
+        `;
+
+        return `
+            <div class="${containerClasses}">
+                ${deleteBtnHTML}
+                <div class="${isMain ? 'w-full text-center' : 'flex-grow'}">
+                    <input type="text" value="${counter.name}" data-property="name" data-id="${counter.id}" 
+                           class="bg-transparent ${nameInputClasses} w-full focus:bg-gray-700 rounded-md p-1 -m-1">
+                </div>
+                <div class="flex items-center justify-center space-x-2 my-2">
+                    <button data-action="decrement" data-id="${counter.id}" class="w-16 h-16 md:w-20 md:h-20 text-4xl font-light rounded-full bg-gray-700 hover:bg-gray-600 transition">-</button>
+                    <div class="text-center">
+                        ${counterDisplayHTML}
+                    </div>
+                    <button data-action="increment" data-id="${counter.id}" class="w-16 h-16 md:w-20 md:h-20 text-4xl font-light rounded-full bg-gray-700 hover:bg-gray-600 transition">+</button>
+                </div>
+                <div class="flex items-center justify-center space-x-4">
+                     <button data-action="reset" data-id="${counter.id}" class="text-sm text-gray-500 hover:text-gray-200">Reset</button>
+                     ${appState.settings.showTimer ? `<button data-action="toggle-target" data-id="${counter.id}" class="text-sm text-gray-500 hover:text-gray-200">${counter.target ? 'Remove Target' : 'Set Target'}</button>` : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    // --- MODAL & NOTIFICATION MANAGEMENT --- //
 
     function showModal(modalName) {
         appState.activeModal = modalName;
@@ -358,15 +474,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderModals() {
         const activeModal = appState.activeModal;
+        dom.modalContainer.hidden = !activeModal;
+
+        Object.values(dom.modals).forEach(modal => modal.hidden = true);
         
-        if (activeModal) {
-            dom.modalContainer.hidden = false;
-            Object.values(dom.modals).forEach(modal => modal.hidden = true);
-            if (dom.modals[activeModal]) {
-                dom.modals[activeModal].hidden = false;
-            }
-        } else {
-            dom.modalContainer.hidden = true;
+        if (activeModal && dom.modals[activeModal]) {
+            dom.modals[activeModal].hidden = false;
         }
 
         if (activeModal === 'confirm') {
@@ -379,30 +492,54 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function showToast(message, type = 'info', duration = 3000) {
+        appState.toast = { message, type, visible: true };
+        renderToast();
 
-    // --- EVENT LISTENERS --- //
+        setTimeout(() => {
+            appState.toast.visible = false;
+            renderToast();
+        }, duration);
+    }
+
+    function renderToast() {
+        const { message, type, visible } = appState.toast;
+        const toastElement = dom.toastContainer;
+
+        if (visible) {
+            const bgColor = {
+                info: 'bg-gray-800',
+                success: 'bg-green-600',
+                error: 'bg-red-600'
+            }[type];
+            toastElement.textContent = message;
+            toastElement.className = `fixed bottom-5 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full text-white shadow-lg animate-slide-up-fast ${bgColor}`;
+            toastElement.hidden = false;
+        } else {
+            toastElement.hidden = true;
+        }
+    }
+
+    // --- EVENT LISTENERS & HANDLERS --- //
 
     function registerEventListeners() {
-        // Project-level actions
-        dom.projectName.addEventListener('input', (e) => updateAndSave(() => appState.activeProject.name = e.target.value));
-        dom.projectNotes.addEventListener('input', (e) => updateAndSave(() => appState.activeProject.notes = e.target.value));
-        dom.projectPatternUrl.addEventListener('input', (e) => updateAndSave(() => appState.activeProject.patternUrl = e.target.value));
+        dom.projectName.addEventListener('input', (e) => updateProjectProperty('name', e.target.value));
+        dom.projectNotes.addEventListener('input', (e) => updateProjectProperty('notes', e.target.value));
+        dom.projectPatternUrl.addEventListener('input', (e) => updateProjectProperty('patternUrl', e.target.value));
 
-        // Using event delegation on a container for dynamic elements
         dom.app.addEventListener('click', handleAppClick);
-        dom.app.addEventListener('input', handleAppInput); // For counter name/target changes
+        dom.app.addEventListener('input', handleAppInput);
         
-        // Modal actions
         dom.modalContainer.addEventListener('click', handleModalClick);
 
-        // Settings
         dom.showTimerToggle.addEventListener('change', (e) => {
             appState.settings.showTimer = e.target.checked;
             saveSettings();
-            renderTimer();
+            render();
         });
     }
 
+    // Main click handler using event delegation.
     function handleAppClick(e) {
         const target = e.target.closest('[data-action]');
         if (!target) return;
@@ -414,48 +551,90 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'decrement': decrementCounter(id); break;
             case 'reset': resetCounter(id); break;
             case 'add-sub-counter': addSubCounter(); break;
-            case 'delete-sub-counter': deleteSub-counter(id); break;
-            case 'save-project': saveActiveProject(); break;
-            case 'clear-project':
+            case 'delete-sub-counter':
                 showConfirmation({
-                    action: 'clear-project',
-                    title: 'Clear Project?',
-                    message: 'This will reset the name, remove all sub-counters, and set counts to zero. This cannot be undone.'
+                    title: 'Delete Counter?',
+                    message: `Are you sure you want to delete this sub-counter? This cannot be undone.`,
+                    onConfirm: () => {
+                        deleteSubCounter(id);
+                        showToast('Sub-counter deleted.', 'success');
+                    }
+                });
+                break;
+            case 'save-project': saveActiveProject(); break;
+            case 'delete-project-current':
+                if (!appState.activeProject.id) {
+                    showToast("This project isn't saved yet.", "info");
+                    return;
+                }
+                showConfirmation({
+                    title: `Delete "${appState.activeProject.name}"?`,
+                    message: 'This project will be permanently removed from your device.',
+                    onConfirm: () => handleProjectDeletion(appState.activeProject.id)
                 });
                 break;
             case 'load-project': loadProject(id); break;
             case 'delete-project':
                  showConfirmation({
-                    action: 'delete-project',
-                    data: { id },
                     title: `Delete "${name}"?`,
-                    message: 'This project will be permanently removed from your device.'
+                    message: 'This project will be permanently removed from your device.',
+                    onConfirm: () => handleProjectDeletion(id)
                 });
                 break;
             case 'toggle-settings': showModal('settings'); break;
             case 'toggle-projects': showModal('projects'); break;
             case 'toggle-timer-pause': toggleTimerPause(); break;
-            case 'toggle-theme': toggleTheme(); break;
+            case 'toggle-target':
+                updateAndSave(() => {
+                    const counter = findCounter(id);
+                    if (counter) {
+                        // If target is already set, unset it. Otherwise, prompt for a value.
+                        if (counter.target) {
+                            counter.target = null;
+                        } else {
+                            counter.target = parseInt(prompt("Set a target value:", counter.value + 10), 10) || null;
+                        }
+                    }
+                });
+                break;
             case 'start-new-project':
-                setActiveProject(createDefaultProject());
-                closeModal();
-                render();
+                if (appState.isDirty) {
+                    showConfirmation({
+                        title: 'Unsaved Changes',
+                        message: 'You have unsaved changes. Are you sure you want to start a new project and discard them?',
+                        onConfirm: () => {
+                            setActiveProject(createDefaultProject());
+                            closeModal();
+                            render();
+                        }
+                    });
+                } else {
+                    setActiveProject(createDefaultProject());
+                    closeModal();
+                    render();
+                }
                 break;
         }
     }
 
+    // Handles input events for dynamically created counter fields.
     function handleAppInput(e) {
         const target = e.target.closest('[data-property]');
         if (!target) return;
         
         const { id, property } = target.dataset;
-        const value = property === 'target' ? parseInt(target.value, 10) || 0 : target.value;
+        const value = property === 'target' ? (parseInt(target.value, 10) || null) : target.value;
         
         updateCounterProperty(id, property, value);
     }
     
+    // Handles clicks within the modal container (closing, confirming, etc.).
     function handleModalClick(e) {
         const target = e.target.closest('[data-action]');
+        if (e.target === dom.modalOverlay) {
+            closeModal();
+            return;
+        }
         if (!target) return;
 
         const { action } = target.dataset;
@@ -465,37 +644,21 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'confirm-cancel': closeModal(); break;
             case 'confirm-proceed': handleConfirmationProceed(); break;
         }
-        
-        // Close modal if overlay is clicked
-        if (e.target === dom.modalOverlay) {
-            closeModal();
-        }
     }
     
+    // Central handler for the "Proceed" button in the confirmation modal.
     function handleConfirmationProceed() {
-        const { action, data } = appState.confirmationContext;
-        
-        switch (action) {
-            case 'clear-project':
-                const clearedProject = createDefaultProject();
-                // Retain ID if it was a saved project, so it overwrites instead of creating a new one
-                clearedProject.id = appState.activeProject.id; 
-                setActiveProject(clearedProject);
-                if (clearedProject.id) {
-                    saveActiveProject(); // Save the cleared state
-                }
-                break;
-            case 'delete-project':
-                handleProjectDeletion(data.id);
-                break;
-        }
+        const { onConfirm } = appState.confirmationContext;
 
+        if (onConfirm && typeof onConfirm === 'function') {
+            onConfirm();
+        }
+        
         closeModal();
         render();
     }
 
-
-    // --- SETTINGS & THEME --- //
+    // --- SETTINGS --- //
     
     function loadSettings() {
         const savedSettings = localStorage.getItem('crochetCounterSettings');
@@ -508,20 +671,12 @@ document.addEventListener('DOMContentLoaded', () => {
         localStorage.setItem('crochetCounterSettings', JSON.stringify(appState.settings));
     }
 
-    function toggleTheme() {
-        appState.settings.theme = appState.settings.theme === 'light' ? 'dark' : 'light';
-        saveSettings();
-        renderTheme();
-    }
-
-
     // --- HELPERS & UTILITIES --- //
 
     function findCounter(counterId) {
         const project = appState.activeProject;
-        if (counterId === 'main') {
-            return project.mainCounter;
-        }
+        if (!project) return null;
+        if (counterId === 'main') return project.mainCounter;
         return project.subCounters.find(c => c.id === counterId);
     }
 
@@ -533,10 +688,9 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
     }
     
+    // Calculates the estimated time to complete a counter's target based on increment history.
     function calculateETA(counter) {
-        if (!counter.target || counter.target <= counter.value) {
-            return null;
-        }
+        if (!counter.target || counter.target <= counter.value) return null;
 
         const increments = appState.activeProject.incrementHistory
             .filter(h => h.counterId === counter.id)
@@ -554,75 +708,24 @@ document.addEventListener('DOMContentLoaded', () => {
         const etaMs = remainingIncrements * avgTimePerIncrement;
         
         const minutes = Math.ceil(etaMs / 60000);
-        if (minutes < 1) return "< 1m remaining";
-        if (minutes < 60) return `~${minutes}m remaining`;
+        if (minutes < 1) return "ETA: < 1 min";
+        if (minutes < 60) return `ETA: ~${minutes} min`;
         const hours = Math.floor(minutes / 60);
         const remMinutes = minutes % 60;
-        return `~${hours}h ${remMinutes}m remaining`;
+        return `ETA: ~${hours}h ${remMinutes}m`;
     }
 
-    function createCounterHTML(counter, isMain) {
-        const targetHTML = `
-            <span class="text-2xl text-gray-400 dark:text-gray-500">/</span>
-            <input type="number" min="0" value="${counter.target || ''}" placeholder="Target" data-property="target" data-id="${counter.id}" 
-                   class="bg-transparent text-2xl w-24 text-center focus:bg-gray-100 dark:focus:bg-gray-700 rounded-md">
-        `;
-        
-        const eta = calculateETA(counter);
-        const etaHTML = eta ? `<p class="text-sm text-center text-violet-500 font-medium">${eta}</p>` : '';
-
-        const deleteBtnHTML = isMain ? '' : `
-            <button data-action="delete-sub-counter" data-id="${counter.id}" class="absolute -top-2 -right-2 p-1 bg-gray-200 dark:bg-gray-600 rounded-full text-gray-500 dark:text-gray-300 hover:bg-red-500/20 hover:text-red-500 transition">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-            </button>
-        `;
-
-        const containerClasses = isMain 
-            ? 'flex flex-col items-center' 
-            : 'relative bg-white dark:bg-gray-800 p-4 rounded-xl shadow-md flex items-center justify-between space-x-4';
-            
-        const nameInputClasses = isMain 
-            ? 'font-semibold text-xl text-center' 
-            : 'font-medium flex-grow';
-
-        return `
-            <div class="${containerClasses}">
-                <div class="${isMain ? 'w-full text-center' : 'flex-grow'}">
-                    <input type="text" value="${counter.name}" data-property="name" data-id="${counter.id}" class="bg-transparent ${nameInputClasses} w-full focus:bg-gray-100 dark:focus:bg-gray-700 rounded-md p-1 -m-1">
-                </div>
-                <div class="flex items-center justify-center space-x-2 my-2">
-                    <button data-action="decrement" data-id="${counter.id}" class="w-16 h-16 md:w-20 md:h-20 text-4xl font-light rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition">-</button>
-                    <div class="flex items-baseline justify-center font-mono font-bold text-violet-600 dark:text-violet-400">
-                        <span class="counter-value">${counter.value}</span>
-                        ${counter.target > 0 ? targetHTML : ''}
-                    </div>
-                    <button data-action="increment" data-id="${counter.id}" class="w-16 h-16 md:w-20 md:h-20 text-4xl font-light rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition">+</button>
-                </div>
-                <div class="flex items-center space-x-4">
-                     <button data-action="reset" data-id="${counter.id}" class="text-sm text-gray-500 hover:text-gray-800 dark:hover:text-gray-200">Reset</button>
-                     ${etaHTML}
-                </div>
-                ${deleteBtnHTML}
-            </div>
-        `;
-    }
-
-    // --- PWA Service Worker --- //
+    // --- PWA SERVICE WORKER --- //
 
     function registerServiceWorker() {
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/service-worker.js')
-                    .then(registration => {
-                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
-                    })
-                    .catch(err => {
-                        console.log('ServiceWorker registration failed: ', err);
-                    });
+                    .then(reg => console.log('Service Worker registered.', reg))
+                    .catch(err => console.log('Service Worker registration failed: ', err));
             });
         }
     }
-
 
     // --- RUN APP --- //
     init();
