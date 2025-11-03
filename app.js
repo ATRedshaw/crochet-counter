@@ -11,13 +11,19 @@ document.addEventListener('DOMContentLoaded', () => {
         settings: {
             showTimer: true,
         },
-        activeModal: null, // null, 'settings', 'projects', 'confirm'
+        activeModal: null, // null, 'settings', 'projects', 'confirm', 'setTarget'
         confirmationContext: { // Context for the confirmation modal
             action: null,
             data: null,
             title: '',
             message: '',
             onConfirm: null,
+        },
+        setTargetContext: { // Context for the set target modal
+            counterId: null,
+            currentValue: 0,
+            onSet: null,
+            message: '',
         },
         isDirty: false, // Tracks if the active project has unsaved changes
         toast: { // For showing transient messages
@@ -51,10 +57,13 @@ document.addEventListener('DOMContentLoaded', () => {
             settings: document.querySelector('[data-modal="settings"]'),
             projects: document.querySelector('[data-modal="projects"]'),
             confirm: document.querySelector('[data-modal="confirm"]'),
+            setTarget: document.querySelector('[data-modal="setTarget"]'),
         },
         projectsList: document.getElementById('projects-list'),
         confirmTitle: document.querySelector('[data-binding="confirm-title"]'),
         confirmMessage: document.querySelector('[data-binding="confirm-message"]'),
+        setTargetMessage: document.querySelector('[data-binding="set-target-message"]'),
+        setTargetInput: document.getElementById('set-target-input'),
         showTimerToggle: document.querySelector('[data-setting="showTimer"]'),
         toastContainer: document.getElementById('toast-container'),
     };
@@ -418,12 +427,12 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
 
         const containerClasses = isMain 
-            ? 'flex flex-col items-center' 
-            : 'relative bg-gray-800 p-4 rounded-xl shadow-md flex items-center justify-between space-x-4';
+            ? 'flex flex-col items-center'
+            : 'relative bg-gray-800 p-4 rounded-xl shadow-md flex flex-col items-center';
             
-        const nameInputClasses = isMain 
-            ? 'font-semibold text-xl text-center' 
-            : 'font-medium flex-grow';
+        const nameInputClasses = isMain
+            ? 'font-semibold text-xl text-center'
+            : 'font-medium w-full text-center';
 
         const counterDisplayHTML = `
             <div class="flex items-baseline justify-center font-mono font-bold text-violet-400">
@@ -431,13 +440,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 ${showTarget ? targetHTML : ''}
             </div>
             ${etaHTML}
+            <div class="flex flex-col md:flex-row items-center justify-center space-y-2 md:space-y-0 md:space-x-4 mt-2">
+                 <button data-action="reset" data-id="${counter.id}" class="text-sm text-gray-500 hover:text-gray-200">Reset</button>
+                 ${appState.settings.showTimer ? `<button data-action="toggle-target" data-id="${counter.id}" class="text-sm text-gray-500 hover:text-gray-200">${counter.target ? 'Remove Target' : 'Set Target'}</button>` : ''}
+            </div>
         `;
 
         return `
             <div class="${containerClasses}">
                 ${deleteBtnHTML}
-                <div class="${isMain ? 'w-full text-center' : 'flex-grow'}">
-                    <input type="text" value="${counter.name}" data-property="name" data-id="${counter.id}" 
+                <div class="${isMain ? 'w-full text-center' : 'flex-grow w-full'}">
+                    <input type="text" value="${counter.name}" data-property="name" data-id="${counter.id}"
                            class="bg-transparent ${nameInputClasses} w-full focus:bg-gray-700 rounded-md p-1 -m-1">
                 </div>
                 <div class="flex items-center justify-center space-x-2 my-2">
@@ -446,10 +459,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${counterDisplayHTML}
                     </div>
                     <button data-action="increment" data-id="${counter.id}" class="w-16 h-16 md:w-20 md:h-20 text-4xl font-light rounded-full bg-gray-700 hover:bg-gray-600 transition">+</button>
-                </div>
-                <div class="flex items-center justify-center space-x-4">
-                     <button data-action="reset" data-id="${counter.id}" class="text-sm text-gray-500 hover:text-gray-200">Reset</button>
-                     ${appState.settings.showTimer ? `<button data-action="toggle-target" data-id="${counter.id}" class="text-sm text-gray-500 hover:text-gray-200">${counter.target ? 'Remove Target' : 'Set Target'}</button>` : ''}
                 </div>
             </div>
         `;
@@ -489,6 +498,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (activeModal === 'settings') {
             dom.showTimerToggle.checked = appState.settings.showTimer;
+        } else if (activeModal === 'setTarget') {
+            const { counterId, currentValue, message } = appState.setTargetContext;
+            dom.setTargetMessage.textContent = message;
+            dom.setTargetInput.value = currentValue;
+            dom.setTargetInput.dataset.id = counterId; // Store counterId on the input for easy access
         }
     }
 
@@ -588,17 +602,27 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'toggle-projects': showModal('projects'); break;
             case 'toggle-timer-pause': toggleTimerPause(); break;
             case 'toggle-target':
-                updateAndSave(() => {
-                    const counter = findCounter(id);
-                    if (counter) {
-                        // If target is already set, unset it. Otherwise, prompt for a value.
-                        if (counter.target) {
-                            counter.target = null;
-                        } else {
-                            counter.target = parseInt(prompt("Set a target value:", counter.value + 10), 10) || null;
-                        }
+                const counterToTarget = findCounter(id);
+                if (counterToTarget) {
+                    if (counterToTarget.target) {
+                        // If target is already set, unset it directly
+                        updateAndSave(() => {
+                            counterToTarget.target = null;
+                        });
+                    } else {
+                        // Otherwise, show the custom modal to set a new target
+                        showSetTargetModal({
+                            counterId: id,
+                            currentValue: counterToTarget.value + 10, // Suggest a value
+                            message: `Set a target for "${counterToTarget.name}":`,
+                            onSet: (newTarget) => {
+                                updateAndSave(() => {
+                                    counterToTarget.target = newTarget;
+                                });
+                            }
+                        });
                     }
-                });
+                }
                 break;
             case 'start-new-project':
                 if (appState.isDirty) {
@@ -618,6 +642,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 break;
         }
+    }
+
+    function showSetTargetModal(context) {
+        appState.setTargetContext = context;
+        showModal('setTarget');
+    }
+
+    function handleSetTargetProceed() {
+        const { onSet, counterId } = appState.setTargetContext;
+        const newTargetValue = parseInt(dom.setTargetInput.value, 10);
+
+        if (isNaN(newTargetValue) || newTargetValue < 0) {
+            showToast("Please enter a valid positive number for the target.", 'error');
+            return;
+        }
+
+        if (onSet && typeof onSet === 'function') {
+            onSet(newTargetValue);
+        }
+
+        closeModal();
+        render();
     }
 
     // Handles input events for dynamically created counter fields.
@@ -646,6 +692,8 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'close-modal': closeModal(); break;
             case 'confirm-cancel': closeModal(); break;
             case 'confirm-proceed': handleConfirmationProceed(); break;
+            case 'set-target-cancel': closeModal(); break;
+            case 'set-target-proceed': handleSetTargetProceed(); break;
         }
     }
     
