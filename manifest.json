@@ -2,7 +2,7 @@
   "name": "Crochet Counter",
   "short_name": "Crochet Counter",
   "description": "A simple, modern, and accessible web application to be used as a crochet (or knitting) counter.",
-  "start_url": "/",
+  "start_url": "/crochet-counter",
   "display": "standalone",
   "background_color": "#f3f4f6",
   "theme_color": "#8b5cf6",
