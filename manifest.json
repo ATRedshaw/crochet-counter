@@ -1,6 +1,6 @@
 {
   "name": "Crochet Counter",
-  "short_name": "Crochet Counter",
+  "short_name": "Counter",
   "description": "A simple, modern, and accessible web application to be used as a crochet (or knitting) counter.",
   "start_url": "/crochet-counter",
   "display": "standalone",
