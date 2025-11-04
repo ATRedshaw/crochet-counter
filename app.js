@@ -257,6 +257,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const counter = findCounter(counterId);
             if (counter && counter.value > 0) {
                 counter.value--;
+                // Treat a decrement as an undo for ETA calculation: remove the most recent increment record for this counter
+                const history = appState.activeProject.incrementHistory;
+                for (let i = history.length - 1; i >= 0; i--) {
+                    if (history[i].counterId === counterId) {
+                        history.splice(i, 1);
+                        break;
+                    }
+                }
             }
         });
     }
@@ -266,6 +274,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const counter = findCounter(counterId);
             if (counter) {
                 counter.value = 0;
+                // Remove all increment history entries for this counter to keep ETA accurate after a reset
+                appState.activeProject.incrementHistory = appState.activeProject.incrementHistory.filter(h => h.counterId !== counterId);
             }
         });
     }
@@ -286,6 +296,8 @@ document.addEventListener('DOMContentLoaded', () => {
         updateAndSave(() => {
             const project = appState.activeProject;
             project.subCounters = project.subCounters.filter(c => c.id !== counterId);
+            // Remove increment history entries related to the deleted counter so ETA updates correctly
+            project.incrementHistory = project.incrementHistory.filter(h => h.counterId !== counterId);
         });
     }
 
@@ -743,21 +755,42 @@ document.addEventListener('DOMContentLoaded', () => {
     function calculateETA(counter) {
         if (!counter.target || counter.target <= counter.value) return null;
 
-        const increments = appState.activeProject.incrementHistory
+        const project = appState.activeProject;
+        if (!project || !project.incrementHistory || project.incrementHistory.length === 0) return null;
+
+        // Increments specific to this counter (sorted oldest->newest)
+        const incrementsForCounter = project.incrementHistory
             .filter(h => h.counterId === counter.id)
             .sort((a, b) => a.timestamp - b.timestamp);
-        
-        if (increments.length < 2) return null;
 
-        const timeDiffs = [];
-        for (let i = 1; i < increments.length; i++) {
-            timeDiffs.push(increments[i].timestamp - increments[i-1].timestamp);
+        // Global increments across the project as a fallback (sorted oldest->newest)
+        const globalIncrements = project.incrementHistory.slice().sort((a, b) => a.timestamp - b.timestamp);
+
+        // Compute average time per increment given a sorted array of increment records.
+        // If there's only one record, use time since that increment until now to provide a usable estimate.
+        const computeAvgTimePerIncrement = (incArr) => {
+            if (!incArr || incArr.length === 0) return null;
+            if (incArr.length === 1) {
+                // Use elapsed time since the single increment as an approximation
+                return Date.now() - incArr[0].timestamp;
+            }
+            const diffs = [];
+            for (let i = 1; i < incArr.length; i++) {
+                diffs.push(incArr[i].timestamp - incArr[i - 1].timestamp);
+            }
+            return diffs.reduce((a, b) => a + b, 0) / diffs.length;
+        };
+
+        // Prefer counter-specific average when available, otherwise fall back to global average
+        let avgTimePerIncrement = computeAvgTimePerIncrement(incrementsForCounter);
+        if (avgTimePerIncrement === null) {
+            avgTimePerIncrement = computeAvgTimePerIncrement(globalIncrements);
         }
+        if (avgTimePerIncrement === null) return null;
 
-        const avgTimePerIncrement = timeDiffs.reduce((a, b) => a + b, 0) / timeDiffs.length;
         const remainingIncrements = counter.target - counter.value;
         const etaMs = remainingIncrements * avgTimePerIncrement;
-        
+
         const minutes = Math.ceil(etaMs / 60000);
         if (minutes < 1) return "ETA: < 1 min";
         if (minutes < 60) return `ETA: ~${minutes} min`;
