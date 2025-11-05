@@ -593,7 +593,9 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'save-project': saveActiveProject(); break;
             case 'delete-project-current':
                 if (!appState.activeProject.id) {
-                    showToast("This project isn't saved yet.", "info");
+                    setActiveProject(createDefaultProject());
+                    render();
+                    showToast("Project reset to default state.", "info");
                     return;
                 }
                 showConfirmation({
