@@ -4,9 +4,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- STATE MANAGEMENT --- //
 
-    // --- UPDATE NOTIFICATION STATE --- //
-    let updateAvailable = false;
-
     // Holds the entire application state.
     let appState = {
         activeProject: null,
@@ -868,37 +865,59 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Listen for update messages from the service worker
+    // Listens for when a new service worker takes control.
     function setupServiceWorkerUpdateListener() {
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.addEventListener('message', event => {
-                if (event.data && event.data.type === 'NEW_VERSION_AVAILABLE') {
-                    showUpdateNotification();
-                }
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                // This event fires when the new service worker has successfully activated.
+                showUpdateToast();
             });
         }
     }
 
-    // Show a simple update notification banner
-    function showUpdateNotification() {
-        if (updateAvailable) return;
-        updateAvailable = true;
+    // Creates and injects a toast notification to prompt the user to reload.
+    function showUpdateToast() {
+        // Create banner element
         const banner = document.createElement('div');
         banner.id = 'update-banner';
+        banner.textContent = 'A new version is available!';
+
+        // Style the banner
         banner.style.position = 'fixed';
-        banner.style.bottom = '0';
-        banner.style.left = '0';
-        banner.style.width = '100%';
-        banner.style.background = '#2563eb';
-        banner.style.color = 'white';
-        banner.style.textAlign = 'center';
-        banner.style.padding = '1em';
-        banner.style.zIndex = '9999';
-        banner.innerHTML = 'A new version of Crochet Counter is available. <button id="refresh-btn" style="margin-left:1em;padding:0.5em 1em;background:#fff;color:#2563eb;border:none;border-radius:4px;cursor:pointer;">Refresh</button>';
-        document.body.appendChild(banner);
-        document.getElementById('refresh-btn').onclick = () => {
+        banner.style.bottom = '20px';
+        banner.style.left = '50%';
+        banner.style.transform = 'translateX(-50%)';
+        banner.style.padding = '12px 20px';
+        banner.style.backgroundColor = '#1f2937'; // dark-gray consistent with theme
+        banner.style.color = '#e5e7eb'; // light-gray text
+        banner.style.borderRadius = '9999px';
+        banner.style.boxShadow = '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)';
+        banner.style.zIndex = '10000';
+        banner.style.display = 'flex';
+        banner.style.alignItems = 'center';
+        banner.style.gap = '12px';
+
+        // Create reload button
+        const reloadButton = document.createElement('button');
+        reloadButton.textContent = 'Reload';
+
+        // Style the button
+        reloadButton.style.border = 'none';
+        reloadButton.style.backgroundColor = '#7c3aed'; // violet-600
+        reloadButton.style.color = 'white';
+        reloadButton.style.padding = '8px 16px';
+        reloadButton.style.borderRadius = '9999px';
+        reloadButton.style.cursor = 'pointer';
+        reloadButton.style.fontWeight = '500';
+
+        // Add event listener to the button
+        reloadButton.addEventListener('click', () => {
             window.location.reload();
-        };
+        });
+
+        // Append button to banner and banner to body
+        banner.appendChild(reloadButton);
+        document.body.appendChild(banner);
     }
 
     function handleProjectsListClick(e) {
