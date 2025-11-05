@@ -43,35 +43,25 @@ self.addEventListener('activate', event => {
 // Fetch event: serve from cache first, then network.
 self.addEventListener('fetch', event => {
   event.respondWith(
-    caches.match(event.request)
-      .then(response => {
-        // Cache hit - return response
-        if (response) {
-          return response;
+    caches.match(event.request).then(cachedResponse => {
+      const fetchPromise = fetch(event.request).then(networkResponse => {
+        // Only cache valid GET responses
+        if (
+          networkResponse &&
+          networkResponse.status === 200 &&
+          (networkResponse.type === 'basic' || networkResponse.type === 'cors') &&
+          event.request.method === 'GET'
+        ) {
+          const responseToCache = networkResponse.clone();
+          caches.open(CACHE_NAME).then(cache => {
+            cache.put(event.request, responseToCache);
+          });
         }
+        return networkResponse;
+      }).catch(() => cachedResponse); // fallback to cache if network fails
 
-        // Not in cache - fetch from network
-        return fetch(event.request).then(
-          response => {
-            // Check if we received a valid response
-            if(!response || response.status !== 200 || response.type !== 'basic' && response.type !== 'cors') {
-              return response;
-            }
-
-            // Clone the response because it's a stream
-            const responseToCache = response.clone();
-
-            caches.open(CACHE_NAME)
-              .then(cache => {
-                // Only cache GET requests
-                if (event.request.method === 'GET') {
-                    cache.put(event.request, responseToCache);
-                }
-              });
-
-            return response;
-          }
-        );
-      })
-    );
+      // Return cached response immediately, update cache in background
+      return cachedResponse || fetchPromise;
+    })
+  );
 });
