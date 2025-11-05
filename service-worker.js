@@ -1,6 +1,6 @@
 // service-worker.js
 
-const CACHE_NAME = 'crochet-counter-cache-v1';
+const CACHE_NAME = 'crochet-counter-cache-v2';
 const URLS_TO_CACHE = [
   '/',
   '/index.html',
@@ -36,15 +36,6 @@ self.addEventListener('activate', event => {
           }
         })
       );
-    }).then(() => {
-      // Notify all clients that a new SW is activated
-      return self.clients.claim().then(() => {
-        return self.clients.matchAll().then(clients => {
-          clients.forEach(client => {
-            client.postMessage({ type: 'NEW_VERSION_AVAILABLE' });
-          });
-        });
-      });
     })
   );
 });
