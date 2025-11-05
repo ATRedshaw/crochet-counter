@@ -155,11 +155,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!appState.activeProject) return;
         modificationFn();
         appState.activeProject.lastModified = Date.now();
-        markDirty();
 
-        // Auto-save if the project is already saved.
-        if (appState.activeProject.id) {
-            saveActiveProject(true); // Pass true for a silent save
+        // Only mark as dirty if the project isn't saved yet
+        if (!appState.activeProject.id) {
+            markDirty();
+        } else {
+            // For saved projects, auto-save silently without changing button state
+            saveActiveProject(true);
         }
         render();
     }
