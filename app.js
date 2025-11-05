@@ -703,6 +703,21 @@ document.addEventListener('DOMContentLoaded', () => {
         switch (action) {
             case 'close-modal': closeModal(); break;
             case 'confirm-cancel': closeModal(); break;
+            case 'start-new-project':
+                if (appState.isDirty) {
+                    showConfirmation({
+                        title: 'Unsaved Changes',
+                        message: 'You have unsaved changes. Are you sure you want to start a new project and discard them?',
+                        onConfirm: () => {
+                            setActiveProject(createDefaultProject());
+                        }
+                    });
+                } else {
+                    setActiveProject(createDefaultProject());
+                    closeModal();
+                    render();
+                }
+                break;
             case 'confirm-proceed': handleConfirmationProceed(); break;
             case 'set-target-cancel': closeModal(); break;
             case 'set-target-proceed': handleSetTargetProceed(); break;
