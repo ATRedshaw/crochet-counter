@@ -80,13 +80,28 @@ document.addEventListener('DOMContentLoaded', () => {
         applyTheme(); // Apply dark theme on startup
     }
 
-    // Fetches saved projects and loads the most recent one, or creates a new default project.
+    // Fetches saved projects and loads the last active project, or creates a new default project.
     async function loadInitialProject() {
         await fetchSavedProjects();
-        const lastProject = appState.savedProjects[0]; // Already sorted by DB call
-        if (lastProject) {
-            setActiveProject(lastProject);
+        
+        // Try to get the last active project ID from localStorage
+        const lastProjectId = localStorage.getItem('lastProjectId');
+        const wasLastProjectUnsaved = localStorage.getItem('lastProjectUnsaved') === 'true';
+        
+        if (wasLastProjectUnsaved) {
+            // If last project was unsaved, start with default state
+            setActiveProject(createDefaultProject());
+        } else if (lastProjectId) {
+            // Try to find the saved project with matching ID
+            const lastProject = appState.savedProjects.find(p => p.id === lastProjectId);
+            if (lastProject) {
+                setActiveProject(lastProject);
+            } else {
+                // If project not found (might have been deleted), load default
+                setActiveProject(createDefaultProject());
+            }
         } else {
+            // No last project stored, create default
             setActiveProject(createDefaultProject());
         }
         render();
@@ -115,6 +130,15 @@ document.addEventListener('DOMContentLoaded', () => {
         appState.isDirty = false;
         if (project.timer && !project.timer.isPaused) {
             project.timer.lastTick = Date.now();
+        }
+        
+        // Store the last project information
+        if (project.id) {
+            localStorage.setItem('lastProjectId', project.id);
+            localStorage.setItem('lastProjectUnsaved', 'false');
+        } else {
+            localStorage.removeItem('lastProjectId');
+            localStorage.setItem('lastProjectUnsaved', 'true');
         }
     }
 
