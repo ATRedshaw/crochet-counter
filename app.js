@@ -187,11 +187,22 @@ document.addEventListener('DOMContentLoaded', () => {
         if (counter) {
             counter[prop] = value;
             appState.activeProject.lastModified = Date.now();
-            markDirty();
-            if (appState.activeProject.id) {
-                saveActiveProject(true);
+            
+            // For names, only mark as dirty without auto-saving
+            if (prop === 'name') {
+                if (!appState.activeProject.id) {
+                    markDirty();
+                    renderSaveButton();
+                }
             } else {
-                renderSaveButton();
+                // For other properties (like target), auto-save if the project is saved
+                if (appState.activeProject.id) {
+                    saveActiveProject(true);
+                } else {
+                    markDirty();
+                    renderSaveButton();
+                }
+                render();
             }
         }
     }
@@ -403,15 +414,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // Updates the save button's text and disabled state.
     function renderSaveButton() {
         const project = appState.activeProject;
-        if (project.id && !appState.isDirty) {
-            dom.saveProjectBtn.textContent = 'Saved';
-            dom.saveProjectBtn.disabled = true;
-        } else if (project.id && appState.isDirty) {
-            dom.saveProjectBtn.textContent = 'Save Changes';
-            dom.saveProjectBtn.disabled = false;
-        } else {
+        if (!project.id) {
+            // Unsaved project
             dom.saveProjectBtn.textContent = 'Save to Device';
             dom.saveProjectBtn.disabled = false;
+        } else {
+            // For saved projects, always show as Saved
+            dom.saveProjectBtn.textContent = 'Saved';
+            dom.saveProjectBtn.disabled = true;
         }
     }
     
