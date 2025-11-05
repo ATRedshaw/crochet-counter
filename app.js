@@ -723,8 +723,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!target) return;
         
         const { id, property } = target.dataset;
-        const value = property === 'target' ? (parseInt(target.value, 10) || null) : target.value;
         
+        // For target inputs, only update on blur (when focus is lost)
+        if (property === 'target') {
+            target.addEventListener('blur', function onBlur() {
+                const value = parseInt(target.value, 10) || null;
+                updateCounterProperty(id, property, value);
+                target.removeEventListener('blur', onBlur);
+            }, { once: true });
+            return;
+        }
+        
+        // For other properties (like name), update immediately
+        const value = target.value;
         updateCounterProperty(id, property, value);
     }
     
