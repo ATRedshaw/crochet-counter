@@ -821,18 +821,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const globalIncrements = project.incrementHistory.slice().sort((a, b) => a.timestamp - b.timestamp);
 
         // Compute average time per increment given a sorted array of increment records.
-        // If there's only one record, use time since that increment until now to provide a usable estimate.
         const computeAvgTimePerIncrement = (incArr) => {
             if (!incArr || incArr.length === 0) return null;
-            if (incArr.length === 1) {
-                // Use elapsed time since the single increment as an approximation
-                return Date.now() - incArr[0].timestamp;
+
+            const totalTime = appState.activeProject.timer.totalElapsedMs;
+            const totalIncrements = incArr.length;
+
+            if (totalTime > 0 && totalIncrements > 0) {
+                return totalTime / totalIncrements;
             }
-            const diffs = [];
-            for (let i = 1; i < incArr.length; i++) {
-                diffs.push(incArr[i].timestamp - incArr[i - 1].timestamp);
-            }
-            return diffs.reduce((a, b) => a + b, 0) / diffs.length;
+
+            return null; // Not enough data to compute an average
         };
 
         // Prefer counter-specific average when available, otherwise fall back to global average
