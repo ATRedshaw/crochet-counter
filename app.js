@@ -4,6 +4,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- STATE MANAGEMENT --- //
 
+    // --- UPDATE NOTIFICATION STATE --- //
+    let updateAvailable = false;
+
     // Holds the entire application state.
     let appState = {
         activeProject: null,
@@ -72,12 +75,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Main entry point for the application.
     function init() {
-        loadSettings();
-        registerEventListeners();
-        loadInitialProject();
-        startProjectTimer();
-        registerServiceWorker();
-        applyTheme(); // Apply dark theme on startup
+    loadSettings();
+    registerEventListeners();
+    loadInitialProject();
+    startProjectTimer();
+    registerServiceWorker();
+    setupServiceWorkerUpdateListener();
+    applyTheme(); // Apply dark theme on startup
     }
 
     // Fetches saved projects and loads the last active project, or creates a new default project.
@@ -862,6 +866,39 @@ document.addEventListener('DOMContentLoaded', () => {
                     .catch(err => console.log('Service Worker registration failed: ', err));
             });
         }
+    }
+
+    // Listen for update messages from the service worker
+    function setupServiceWorkerUpdateListener() {
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.addEventListener('message', event => {
+                if (event.data && event.data.type === 'NEW_VERSION_AVAILABLE') {
+                    showUpdateNotification();
+                }
+            });
+        }
+    }
+
+    // Show a simple update notification banner
+    function showUpdateNotification() {
+        if (updateAvailable) return;
+        updateAvailable = true;
+        const banner = document.createElement('div');
+        banner.id = 'update-banner';
+        banner.style.position = 'fixed';
+        banner.style.bottom = '0';
+        banner.style.left = '0';
+        banner.style.width = '100%';
+        banner.style.background = '#2563eb';
+        banner.style.color = 'white';
+        banner.style.textAlign = 'center';
+        banner.style.padding = '1em';
+        banner.style.zIndex = '9999';
+        banner.innerHTML = 'A new version of Crochet Counter is available. <button id="refresh-btn" style="margin-left:1em;padding:0.5em 1em;background:#fff;color:#2563eb;border:none;border-radius:4px;cursor:pointer;">Refresh</button>';
+        document.body.appendChild(banner);
+        document.getElementById('refresh-btn').onclick = () => {
+            window.location.reload();
+        };
     }
 
     function handleProjectsListClick(e) {
